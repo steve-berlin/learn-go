@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(mkdir -p ~/.config/caveman)",
-      "Bash(printf '{\\\\n  \"defaultMode\": \"ultra\"\\\\n}\\\\n')"
-    ]
-  }
-}
