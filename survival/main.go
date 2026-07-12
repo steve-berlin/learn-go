@@ -1,5 +1,4 @@
-// Command survival is a round-based survival shooter: move with WASD, aim with
-// the mouse, hold left-click to fire. Clearing a wave starts the next, harder round.
+// Command survival is a round-based survival shooter: WASD to move, mouse to aim, click to fire.
 package main
 
 import (
@@ -21,12 +20,12 @@ const (
 	playerRadius, playerSpeed, playerMaxHP  = 10, 3, 100
 	bulletRadius, bulletSpeed, fireCooldown = 3, 8, 8 // cooldown in ticks
 	enemyRadius, contactDamage, roundHeal   = 9, 12, 15
+	finalRound                              = 10 // clear this wave and the run is won
 )
 
 var (
 	face      = text.NewGoXFace(basicfont.Face7x13)
 	colBG     = color.RGBA{18, 18, 24, 255}
-	colAim    = color.RGBA{70, 70, 90, 255}
 	colPlayer = color.RGBA{80, 220, 120, 255}
 	colEnemy  = color.RGBA{230, 70, 70, 255}
 	colBullet = color.RGBA{250, 210, 90, 255}
@@ -68,8 +67,13 @@ func spawnEdge() (float64, float64) {
 	return float64(rand.IntN(2) * screenW), float64(rand.IntN(screenH))
 }
 
+// done reports that the run has ended: the player is dead, or the final wave is clear.
+func (g *game) done() bool {
+	return g.player.hp <= 0 || (g.round >= finalRound && len(g.enemies) == 0)
+}
+
 func (g *game) Update() error {
-	if g.player.hp <= 0 {
+	if g.done() {
 		if inpututil.IsKeyJustPressed(ebiten.KeyR) {
 			*g = *newGame()
 		}
@@ -85,7 +89,6 @@ func (g *game) Update() error {
 	return nil
 }
 
-// held reports 1 if any key is down, so opposing keys subtract into one movement axis.
 func held(keys ...ebiten.Key) float64 {
 	for _, k := range keys {
 		if ebiten.IsKeyPressed(k) {
@@ -106,11 +109,8 @@ func (g *game) movePlayer() {
 }
 
 func (g *game) fire() {
-	if g.cooldown > 0 {
-		g.cooldown--
-		return
-	}
-	if !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+	g.cooldown = max(g.cooldown-1, 0)
+	if g.cooldown > 0 || !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
 		return
 	}
 	mx, my := ebiten.CursorPosition()
@@ -119,10 +119,9 @@ func (g *game) fire() {
 	g.cooldown = fireCooldown
 }
 
-// stepBullets advances bullets, drops off-screen ones, and spends a bullet on the first
-// enemy hit. Filtering in place reuses the backing array; same for stepEnemies.
+// stepBullets advances bullets, drops off-screen ones, and spends a bullet on the first enemy hit.
 func (g *game) stepBullets() {
-	live := g.bullets[:0]
+	live := g.bullets[:0] // filtering in place reuses the backing array, so play doesn't allocate
 bullets:
 	for _, b := range g.bullets {
 		b.x, b.y = b.x+b.dx, b.y+b.dy
@@ -149,13 +148,12 @@ func (g *game) stepEnemies() {
 			continue
 		}
 		dx, dy := g.player.x-e.x, g.player.y-e.y
-		if d := math.Hypot(dx, dy); d > 0 {
-			e.x, e.y = e.x+dx/d*e.spd, e.y+dy/d*e.spd
-			if d < playerRadius+enemyRadius {
-				g.player.hp -= contactDamage
-				continue
-			}
+		d := math.Hypot(dx, dy)
+		if d < playerRadius+enemyRadius { // guards the division below: d is never 0 here
+			g.player.hp -= contactDamage
+			continue
 		}
+		e.x, e.y = e.x+dx/d*e.spd, e.y+dy/d*e.spd
 		live = append(live, e)
 	}
 	g.enemies = live
@@ -170,13 +168,14 @@ func (g *game) Draw(screen *ebiten.Image) {
 		vector.FillCircle(screen, float32(b.x), float32(b.y), bulletRadius, colBullet, true)
 	}
 	if g.player.hp > 0 {
-		mx, my := ebiten.CursorPosition()
-		vector.StrokeLine(screen, float32(g.player.x), float32(g.player.y), float32(mx), float32(my), 1, colAim, true)
 		vector.FillCircle(screen, float32(g.player.x), float32(g.player.y), playerRadius, colPlayer, true)
 	}
-	label(screen, fmt.Sprintf("ROUND %d   HP %d   SCORE %d   LEFT %d", g.round, max(g.player.hp, 0), g.score, len(g.enemies)), 8, 8)
-	if g.player.hp <= 0 {
-		label(screen, fmt.Sprintf("GAME OVER\nreached round %d with %d points\npress R to restart", g.round, g.score), screenW/2-90, screenH/2-20)
+	label(screen, fmt.Sprintf("ROUND %d/%d   HP %d   SCORE %d   LEFT %d", g.round, finalRound, max(g.player.hp, 0), g.score, len(g.enemies)), 8, 8)
+	switch {
+	case g.player.hp <= 0:
+		label(screen, fmt.Sprintf("GAME OVER\nfell on round %d of %d  ·  %d points\npress R to try again", g.round, finalRound, g.score), screenW/2-115, screenH/2-24)
+	case g.done():
+		label(screen, fmt.Sprintf("YOU SURVIVED\nall %d rounds cleared  ·  %d points  ·  %d HP left\npress R to play again", finalRound, g.score, g.player.hp), screenW/2-155, screenH/2-24)
 	}
 }
 

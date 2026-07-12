@@ -3,9 +3,12 @@
 Round-based survival shooter. Go + [Ebitengine](https://ebitengine.org). See `README.md` for
 gameplay, controls and design notes; this file is the contract for working on the code.
 
+Own module (`github.com/steve-berlin/learn-go/survival`) inside the multi-project `learn-go` repo.
+Run every command from this directory, not the repo root.
+
 ## Hard constraints
 
-- **`main.go` is the whole program and must stay under 200 lines.** Currently 199. Any new feature
+- **`main.go` is the whole program and must stay under 200 lines.** Currently 198. Any new feature
   has to pay for itself — find lines elsewhere or make the case for the trade before writing it.
 - **Minimal dependencies.** Two direct: `ebiten/v2` (window, GPU, input) and `x/image` (bitmap font).
   Adding a third needs justification; the stdlib usually already has it.

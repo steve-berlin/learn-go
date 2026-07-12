@@ -1,4 +1,4 @@
-module survival
+module github.com/steve-berlin/learn-go/survival
 
 go 1.26.3
 
