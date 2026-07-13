@@ -19,7 +19,9 @@ const (
 	screenW, screenH                        = 640, 480
 	playerRadius, playerSpeed, playerMaxHP  = 10, 3, 100
 	bulletRadius, bulletSpeed, fireCooldown = 3, 8, 8 // cooldown in ticks
-	enemyRadius, contactDamage, roundHeal   = 9, 12, 15
+	contactDamage, roundHeal                = 12, 15
+	packRadius, packHeal, packScore         = 6, 20, 25
+	packChance                              = 4  // one kill in packChance drops a health pack
 	finalRound                              = 10 // clear this wave and the run is won
 )
 
@@ -27,35 +29,48 @@ var (
 	face      = text.NewGoXFace(basicfont.Face7x13)
 	colBG     = color.RGBA{18, 18, 24, 255}
 	colPlayer = color.RGBA{80, 220, 120, 255}
-	colEnemy  = color.RGBA{230, 70, 70, 255}
 	colBullet = color.RGBA{250, 210, 90, 255}
+	colPack   = color.RGBA{110, 200, 255, 255}
+
+	// kinds are the enemy archetypes — steady grunt, fragile sprinter, slow brute — drawn at random
+	// per spawn and then scaled by the round in nextRound.
+	kinds = []ent{
+		{spd: 1.0, hp: 2, r: 9, col: color.RGBA{230, 70, 70, 255}},
+		{spd: 2.1, hp: 1, r: 6, col: color.RGBA{240, 150, 60, 255}},
+		{spd: 0.5, hp: 6, r: 15, col: color.RGBA{175, 85, 215, 255}},
+	}
 )
 
-// ent is a moving circle: bullets carry a velocity in dx, dy; enemies keep a scalar spd.
+// ent is a moving circle: player, bullet, enemy or health pack. Bullets carry a velocity in dx, dy;
+// enemies keep a scalar spd and re-aim at the player every tick.
 type ent struct {
-	x, y, dx, dy, spd float64
-	hp                int
+	x, y, dx, dy, spd, r float64
+	hp                   int
+	col                  color.RGBA
 }
 
 type game struct {
-	player                 ent
-	enemies, bullets       []ent
-	round, score, cooldown int
+	player                  ent
+	enemies, bullets, packs []ent
+	round, score, cooldown  int
 }
 
 func newGame() *game {
-	g := &game{player: ent{x: screenW / 2, y: screenH / 2, hp: playerMaxHP}}
+	g := &game{player: ent{x: screenW / 2, y: screenH / 2, r: playerRadius, hp: playerMaxHP, col: colPlayer}}
 	g.nextRound()
 	return g
 }
 
-// nextRound scales count, speed and toughness with the round, and heals the survivor.
+// nextRound scales enemy count, speed and toughness with the round, and heals the survivor.
 func (g *game) nextRound() {
 	g.round++
 	g.player.hp = min(g.player.hp+roundHeal, playerMaxHP)
 	for range g.round*2 + 2 {
-		x, y := spawnEdge()
-		g.enemies = append(g.enemies, ent{x: x, y: y, spd: 0.7 + float64(g.round)*0.12, hp: 1 + g.round/4})
+		e := kinds[rand.IntN(len(kinds))]
+		e.x, e.y = spawnEdge()
+		e.spd += float64(g.round) * 0.08
+		e.hp += g.round / 4
+		g.enemies = append(g.enemies, e)
 	}
 }
 
@@ -65,6 +80,18 @@ func spawnEdge() (float64, float64) {
 		return float64(rand.IntN(screenW)), float64(rand.IntN(2) * screenH)
 	}
 	return float64(rand.IntN(2) * screenW), float64(rand.IntN(screenH))
+}
+
+// filter keeps the entities for which keep reports true, reusing the backing array so steady-state
+// play doesn't allocate. keep takes a pointer, so it may mutate the entity it is judging.
+func filter(es []ent, keep func(e *ent) bool) []ent {
+	live := es[:0]
+	for i := range es {
+		if keep(&es[i]) {
+			live = append(live, es[i])
+		}
+	}
+	return live
 }
 
 // done reports that the run has ended: the player is dead, or the final wave is clear.
@@ -83,6 +110,7 @@ func (g *game) Update() error {
 	g.fire()
 	g.stepBullets()
 	g.stepEnemies()
+	g.stepPacks()
 	if len(g.enemies) == 0 {
 		g.nextRound()
 	}
@@ -114,58 +142,69 @@ func (g *game) fire() {
 		return
 	}
 	mx, my := ebiten.CursorPosition()
-	a := math.Atan2(float64(my)-g.player.y, float64(mx)-g.player.x) // Atan2 stays defined when the cursor sits on the player
-	g.bullets = append(g.bullets, ent{x: g.player.x, y: g.player.y, dx: math.Cos(a) * bulletSpeed, dy: math.Sin(a) * bulletSpeed})
+	a := math.Atan2(float64(my)-g.player.y, float64(mx)-g.player.x) // Atan2 stays defined with the cursor on the player
+	g.bullets = append(g.bullets, ent{x: g.player.x, y: g.player.y, r: bulletRadius, col: colBullet,
+		dx: math.Cos(a) * bulletSpeed, dy: math.Sin(a) * bulletSpeed})
 	g.cooldown = fireCooldown
 }
 
 // stepBullets advances bullets, drops off-screen ones, and spends a bullet on the first enemy hit.
 func (g *game) stepBullets() {
-	live := g.bullets[:0] // filtering in place reuses the backing array, so play doesn't allocate
-bullets:
-	for _, b := range g.bullets {
+	g.bullets = filter(g.bullets, func(b *ent) bool {
 		b.x, b.y = b.x+b.dx, b.y+b.dy
 		if b.x < 0 || b.x > screenW || b.y < 0 || b.y > screenH {
-			continue
+			return false
 		}
 		for i := range g.enemies {
-			if e := &g.enemies[i]; math.Hypot(e.x-b.x, e.y-b.y) < enemyRadius+bulletRadius {
+			if e := &g.enemies[i]; math.Hypot(e.x-b.x, e.y-b.y) < e.r+b.r {
 				e.hp--
-				continue bullets
+				return false
 			}
 		}
-		live = append(live, b)
-	}
-	g.bullets = live
+		return true
+	})
 }
 
-// stepEnemies homes enemies on the player, banks score for the dead, and trades an enemy for HP on contact.
+// stepEnemies homes enemies on the player, banks score and rolls a pack drop for the dead, and
+// trades an enemy for player HP on contact.
 func (g *game) stepEnemies() {
-	live := g.enemies[:0]
-	for _, e := range g.enemies {
+	g.enemies = filter(g.enemies, func(e *ent) bool {
 		if e.hp <= 0 {
 			g.score += 10 * g.round
-			continue
+			if rand.IntN(packChance) == 0 {
+				g.packs = append(g.packs, ent{x: e.x, y: e.y, r: packRadius, col: colPack})
+			}
+			return false
 		}
 		dx, dy := g.player.x-e.x, g.player.y-e.y
 		d := math.Hypot(dx, dy)
-		if d < playerRadius+enemyRadius { // guards the division below: d is never 0 here
+		if d < g.player.r+e.r { // guards the division below: d is never 0 past this point
 			g.player.hp -= contactDamage
-			continue
+			return false
 		}
 		e.x, e.y = e.x+dx/d*e.spd, e.y+dy/d*e.spd
-		live = append(live, e)
-	}
-	g.enemies = live
+		return true
+	})
+}
+
+// stepPacks collects any health pack the player walks over.
+func (g *game) stepPacks() {
+	g.packs = filter(g.packs, func(p *ent) bool {
+		if math.Hypot(g.player.x-p.x, g.player.y-p.y) > g.player.r+p.r {
+			return true
+		}
+		g.player.hp = min(g.player.hp+packHeal, playerMaxHP)
+		g.score += packScore
+		return false
+	})
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
 	screen.Fill(colBG)
-	for _, e := range g.enemies {
-		vector.FillCircle(screen, float32(e.x), float32(e.y), enemyRadius, colEnemy, true)
-	}
-	for _, b := range g.bullets {
-		vector.FillCircle(screen, float32(b.x), float32(b.y), bulletRadius, colBullet, true)
+	for _, es := range [][]ent{g.packs, g.enemies, g.bullets} { // packs first: they sit under the fight
+		for _, e := range es {
+			vector.FillCircle(screen, float32(e.x), float32(e.y), float32(e.r), e.col, true)
+		}
 	}
 	if g.player.hp > 0 {
 		vector.FillCircle(screen, float32(g.player.x), float32(g.player.y), playerRadius, colPlayer, true)
