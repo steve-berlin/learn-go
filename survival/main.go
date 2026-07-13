@@ -111,7 +111,7 @@ func (g *game) Update() error {
 	g.stepBullets()
 	g.stepEnemies()
 	g.stepPacks()
-	if len(g.enemies) == 0 {
+	if len(g.enemies) == 0 && g.round < finalRound { // past finalRound a cleared wave is a win, not a new round
 		g.nextRound()
 	}
 	return nil
@@ -199,15 +199,21 @@ func (g *game) stepPacks() {
 	})
 }
 
+// circle paints one entity. Every drawn thing is a filled circle, so radius and colour ride on the
+// ent itself rather than being looked up per kind at draw time.
+func circle(dst *ebiten.Image, e ent) {
+	vector.FillCircle(dst, float32(e.x), float32(e.y), float32(e.r), e.col, true)
+}
+
 func (g *game) Draw(screen *ebiten.Image) {
 	screen.Fill(colBG)
 	for _, es := range [][]ent{g.packs, g.enemies, g.bullets} { // packs first: they sit under the fight
 		for _, e := range es {
-			vector.FillCircle(screen, float32(e.x), float32(e.y), float32(e.r), e.col, true)
+			circle(screen, e)
 		}
 	}
-	if g.player.hp > 0 {
-		vector.FillCircle(screen, float32(g.player.x), float32(g.player.y), playerRadius, colPlayer, true)
+	if g.player.hp > 0 { // a dead player leaves the field, so the end screen isn't drawn over a corpse
+		circle(screen, g.player)
 	}
 	label(screen, fmt.Sprintf("ROUND %d/%d   HP %d   SCORE %d   LEFT %d", g.round, finalRound, max(g.player.hp, 0), g.score, len(g.enemies)), 8, 8)
 	switch {
